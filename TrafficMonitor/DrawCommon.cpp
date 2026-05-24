@@ -372,7 +372,7 @@ void DrawCommonHelper::FixBitmapTextAlpha(HBITMAP hBitmap, BYTE alpha, std::set<
         {
             int index = y * width + x;
             //如果检测到alpha值为0，但是却不在alpha_points里，将其修正为正确的alpha值
-            if (pPixels[index].rgbReserved == 0 && !alpha_points.contains(Point(x, y)))
+            if (pPixels[index].rgbReserved == 0 && alpha_points.count(Point(x, y)) == 0)
                 pPixels[index].rgbReserved = alpha; // 设置Alpha通道
         }
     }

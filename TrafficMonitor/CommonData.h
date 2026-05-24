@@ -122,6 +122,7 @@ struct FontInfo
     bool strike_out{};  //删除线
 
     bool operator==(const FontInfo& a) const;
+    bool operator!=(const FontInfo& a) const { return !(*this == a); }
 
     //创建一个CFont对象
     void Create(CFont& font, int dpi = 0) const
@@ -181,6 +182,7 @@ struct LanguageInfo
     {
         return bcp_47 == another.bcp_47 && display_name == another.display_name && translator == another.translator;
     }
+    bool operator!=(const LanguageInfo& another) const { return !(*this == another); }
 
     wstring toConfigString() const;
     void fromConfigString(const wstring& config_str);
@@ -238,6 +240,7 @@ struct SkinSettingData
 
     bool IsEmpty() const;
     bool operator==(const SkinSettingData& a) const;
+    bool operator!=(const SkinSettingData& a) const { return !(*this == a); }
 };
 
 //选项设置中“主窗口设置”和“任务栏窗口设置”中公共的数据（不使用此结构体创建对象）

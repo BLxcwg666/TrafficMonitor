@@ -111,6 +111,7 @@ BEGIN_MESSAGE_MAP(CTrafficMonitorDlg, CDialog)
     ON_MESSAGE(WM_DPICHANGED, &CTrafficMonitorDlg::OnDpichanged)
     ON_MESSAGE(WM_TASKBAR_WND_CLOSED, &CTrafficMonitorDlg::OnTaskbarWndClosed)
     ON_MESSAGE(WM_MONITOR_INFO_UPDATED, &CTrafficMonitorDlg::OnMonitorInfoUpdated)
+    ON_MESSAGE(WM_HARDWARE_MONITOR_ERROR, &CTrafficMonitorDlg::OnHardwareMonitorError)
     ON_MESSAGE(WM_DISPLAYCHANGE, &CTrafficMonitorDlg::OnDisplaychange)
     ON_WM_EXITSIZEMOVE()
     ON_COMMAND(ID_PLUGIN_MANAGE, &CTrafficMonitorDlg::OnPluginManage)
@@ -1413,6 +1414,7 @@ void CTrafficMonitorDlg::DoMonitorAcquisition()
         CSingleLock sync(&theApp.m_minitor_lib_critical, TRUE);
         CString error_info = CCommon::LoadText(IDS_HARDWARE_INFO_ACQUIRE_FAILED_ERROR);
 
+        bool hardware_info_exception = false;
         auto getHardwareInfo = [&]() {
             __try
             {
@@ -1420,15 +1422,23 @@ void CTrafficMonitorDlg::DoMonitorAcquisition()
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
-                AfxMessageBox(error_info, MB_ICONERROR | MB_OK);
+                hardware_info_exception = true;
             }
         };
 
         getHardwareInfo();
+        if (hardware_info_exception)
+        {
+            CSingleLock err_lock(&m_error_info_critical, TRUE);
+            m_hardware_error_info = error_info;
+            PostMessage(WM_HARDWARE_MONITOR_ERROR);
+        }
         auto monitor_error_message{ OpenHardwareMonitorApi::GetErrorMessage() };
         if (!monitor_error_message.empty())
         {
-            AfxMessageBox(monitor_error_message.c_str(), MB_ICONERROR | MB_OK);
+            CSingleLock err_lock(&m_error_info_critical, TRUE);
+            m_hardware_error_info = monitor_error_message.c_str();
+            PostMessage(WM_HARDWARE_MONITOR_ERROR);
         }
         //theApp.m_cpu_temperature = theApp.m_pMonitor->CpuTemperature();
         theApp.m_gpu_temperature = theApp.m_pMonitor->GpuTemperature();
@@ -1520,8 +1530,8 @@ void CTrafficMonitorDlg::DoMonitorAcquisition()
 
     m_monitor_time_cnt++;
 
-    //发送监控信息更新消息
-    SendMessage(WM_MONITOR_INFO_UPDATED);
+    //异步通知UI线程监控信息已更新，避免跨线程SendMessage导致死锁
+    PostMessage(WM_MONITOR_INFO_UPDATED);
 }
 
 UINT CTrafficMonitorDlg::MonitorThreadCallback(LPVOID dwUser)
@@ -1559,8 +1569,32 @@ void CTrafficMonitorDlg::ExitMonitorThread()
     // 通知线程退出
     m_is_thread_exit = true;
 
-    // 等待线程退出
-    ::WaitForSingleObject(m_threadExitEvent.m_hObject, 1000);
+    // 等待线程退出，同时保持消息泵运转，避免阻塞UI线程导致explorer死锁
+    DWORD dwTimeout = 1000;
+    DWORD dwStart = GetTickCount();
+    while (true)
+    {
+        DWORD dwElapsed = GetTickCount() - dwStart;
+        if (dwElapsed >= dwTimeout)
+            break;
+        DWORD dwWaitResult = ::MsgWaitForMultipleObjects(
+            1, &m_threadExitEvent.m_hObject, FALSE, dwTimeout - dwElapsed, QS_ALLINPUT);
+        if (dwWaitResult == WAIT_OBJECT_0)
+            break;
+        if (dwWaitResult == WAIT_OBJECT_0 + 1)
+        {
+            MSG msg;
+            while (::PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+            {
+                ::TranslateMessage(&msg);
+                ::DispatchMessage(&msg);
+            }
+        }
+        else
+        {
+            break;
+        }
+    }
 }
 
 
@@ -2843,6 +2877,22 @@ afx_msg LRESULT CTrafficMonitorDlg::OnMonitorInfoUpdated(WPARAM wParam, LPARAM l
     //更新任务栏窗口鼠标提示
     if (IsTaskbarWndValid())
         m_tBarDlg->UpdateToolTips();
+    return 0;
+}
+
+
+afx_msg LRESULT CTrafficMonitorDlg::OnHardwareMonitorError(WPARAM wParam, LPARAM lParam)
+{
+    CString error_info;
+    {
+        CSingleLock err_lock(&m_error_info_critical, TRUE);
+        error_info = m_hardware_error_info;
+        m_hardware_error_info.Empty();
+    }
+    if (!error_info.IsEmpty())
+    {
+        AfxMessageBox(error_info, MB_ICONERROR | MB_OK);
+    }
     return 0;
 }
 
